@@ -33,18 +33,27 @@ const PROGRAMS = [
 
 // ── SDK deploy (devnet) ─────────────────────────────────────────────
 
+let sdkInitialized = false;
+
+async function ensureSDKInitialized() {
+  if (sdkInitialized) return;
+  const { initThreadPool, getOrInitConsensusVersionTestHeights } =
+    await import("@provablehq/sdk");
+  await initThreadPool();
+  getOrInitConsensusVersionTestHeights("0,1,2,3,4,5,6,7,8,9,10,11,12,13");
+  sdkInitialized = true;
+}
+
 async function deployWithSDK(
   deployerKey: string,
   programSource: string,
   aleoClient: AleoClient,
 ): Promise<{ status: string; error?: string }> {
+  await ensureSDKInitialized();
+
   const {
     ProgramManager, AleoKeyProvider, AleoNetworkClient, PrivateKey, Account,
-    initThreadPool, getOrInitConsensusVersionTestHeights,
   } = await import("@provablehq/sdk");
-
-  await initThreadPool();
-  getOrInitConsensusVersionTestHeights("0,1,2,3,4,5,6,7,8,9,10,11,12,13");
 
   const keyProvider = new AleoKeyProvider();
   keyProvider.useCache(true);
