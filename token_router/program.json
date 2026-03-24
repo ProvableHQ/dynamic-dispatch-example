@@ -1,0 +1,19 @@
+{
+  "program": "token_router.aleo",
+  "version": "0.1.0",
+  "description": "Minimal example demonstrating dynamic dispatch in Leo",
+  "license": "MIT",
+  "dependencies": [
+    {
+      "name": "toka_token.aleo",
+      "location": "local",
+      "path": "../toka_token"
+    },
+    {
+      "name": "tokb_token.aleo",
+      "location": "local",
+      "path": "../tokb_token"
+    }
+  ],
+  "dev_dependencies": []
+}

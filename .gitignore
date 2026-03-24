@@ -1,0 +1,11 @@
+node_modules/
+dist/
+build/
+# Ignore all .env files EXCEPT examples and the bundled devnet config
+.env
+.env.*
+!.env.example
+!.env.devnet
+*.js
+*.d.ts
+*.js.map

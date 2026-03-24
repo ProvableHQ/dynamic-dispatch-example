@@ -1,0 +1,8 @@
+{
+  "program": "toka_token.aleo",
+  "version": "0.1.0",
+  "description": "Minimal ARC-20 token for dynamic dispatch examples",
+  "license": "MIT",
+  "dependencies": [],
+  "dev_dependencies": []
+}
