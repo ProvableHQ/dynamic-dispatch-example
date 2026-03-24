@@ -123,58 +123,63 @@ describe("Token Router — Dynamic Dispatch", function () {
     expect(volume).to.not.be.null;
   });
 
-  it("deposits private tokens via dynamic dispatch", async () => {
-    // Get a private token record by converting public to private
-    const pubToPriv = await executor.executeOnProgram(
-      SENDER_KEY,
-      "toka_token.aleo",
-      "transfer_public_to_private",
-      [senderAddress, "500u128"],
-    );
-    expect(pubToPriv.status).to.equal("accepted", `transfer_public_to_private failed: ${pubToPriv.error}`);
+  for (const [tokenName, tokenProgramId, tokenFieldId] of [
+    ["toka_token", "toka_token.aleo", TOKA_ID],
+    ["tokb_token", "tokb_token.aleo", TOKB_ID],
+  ]) {
+    it(`deposits private ${tokenName} via dynamic dispatch`, async () => {
+      // Get a private token record by converting public to private
+      const pubToPriv = await executor.executeOnProgram(
+        SENDER_KEY,
+        tokenProgramId,
+        "transfer_public_to_private",
+        [senderAddress, "500u128"],
+      );
+      expect(pubToPriv.status).to.equal("accepted", `transfer_public_to_private failed: ${pubToPriv.error}`);
 
-    // Find and decrypt the record output.
-    // dyn record inputs must be plaintext, not encrypted ciphertexts.
-    const recordOutput = pubToPriv.outputs?.find(
-      (o) => o.type === "record" || o.type === "record_with_dynamic_id",
-    );
-    expect(recordOutput).to.not.be.undefined;
+      // Find and decrypt the record output.
+      // dyn record inputs must be plaintext, not encrypted ciphertexts.
+      const recordOutput = pubToPriv.outputs?.find(
+        (o) => o.type === "record" || o.type === "record_with_dynamic_id",
+      );
+      expect(recordOutput).to.not.be.undefined;
 
-    let recordValue = recordOutput!.value;
-    if (recordValue.startsWith("record1") || recordValue.startsWith("ciphertext")) {
-      const decrypted = decryptAndFormatRecord(SENDER_KEY, recordValue);
-      if (!decrypted) {
-        console.log("Could not decrypt record — skipping deposit test");
-        return;
+      let recordValue = recordOutput!.value;
+      if (recordValue.startsWith("record1") || recordValue.startsWith("ciphertext")) {
+        const decrypted = decryptAndFormatRecord(SENDER_KEY, recordValue);
+        if (!decrypted) {
+          console.log("Could not decrypt record — skipping deposit test");
+          return;
+        }
+        recordValue = decrypted;
       }
-      recordValue = decrypted;
-    }
 
-    const result = await routerExecutor.execute(
-      SENDER_KEY,
-      "route_deposit",
-      [TOKA_ID, recordValue, "500u128"],
-    );
+      const result = await routerExecutor.execute(
+        SENDER_KEY,
+        "route_deposit",
+        [tokenFieldId, recordValue, "500u128"],
+      );
 
-    expect(result.status).to.equal("accepted", `route_deposit failed: ${result.error}`);
-  });
+      expect(result.status).to.equal("accepted", `route_deposit failed: ${result.error}`);
+    });
 
-  it("withdraws tokens as private record via dynamic dispatch", async () => {
-    // The router should have public toka balance from the deposit test.
-    const result = await routerExecutor.execute(
-      SENDER_KEY,
-      "route_withdraw",
-      [TOKA_ID, senderAddress, "100u128"],
-    );
+    it(`withdraws ${tokenName} as private record via dynamic dispatch`, async () => {
+      // The router should have public balance from the deposit test above.
+      const result = await routerExecutor.execute(
+        SENDER_KEY,
+        "route_withdraw",
+        [tokenFieldId, senderAddress, "100u128"],
+      );
 
-    expect(result.status).to.equal("accepted", `route_withdraw failed: ${result.error}`);
+      expect(result.status).to.equal("accepted", `route_withdraw failed: ${result.error}`);
 
-    const recordOutput = result.outputs?.find(
-      (o) =>
-        o.type === "record" ||
-        o.type === "record_dynamic" ||
-        o.type === "record_with_dynamic_id",
-    );
-    expect(recordOutput).to.not.be.undefined;
-  });
+      const recordOutput = result.outputs?.find(
+        (o) =>
+          o.type === "record" ||
+          o.type === "record_dynamic" ||
+          o.type === "record_with_dynamic_id",
+      );
+      expect(recordOutput).to.not.be.undefined;
+    });
+  }
 });
