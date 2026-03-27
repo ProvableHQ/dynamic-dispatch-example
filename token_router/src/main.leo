@@ -76,7 +76,7 @@ program token_router.aleo {
     ) -> (dyn record, Final) {
         // Dynamically call `transfer_private_to_public(recipient, amount, record)`
         // on the token program. Returns (change_record, future).
-        let (change, deposit_future): (dyn record, Final) = _dynamic_call::[dyn record, Final](
+        let (change, deposit_future): (dyn record, Final) = _dynamic_call::[address, u128, dyn record, (dyn record, Final)](
             token_id,
             NETWORK_ALEO,
             TRANSFER_PRIVATE_TO_PUBLIC_ID,
@@ -102,7 +102,7 @@ program token_router.aleo {
     ) -> (dyn record, Final) {
         // Dynamically call `transfer_public_to_private(recipient, amount)`
         // on the token program. Returns (token_record, future).
-        let (token_record, withdraw_future): (dyn record, Final) = _dynamic_call::[dyn record, Final](
+        let (token_record, withdraw_future): (dyn record, Final) = _dynamic_call::[address, u128, (dyn record, Final)](
             token_id,
             NETWORK_ALEO,
             TRANSFER_PUBLIC_TO_PRIVATE_ID,
