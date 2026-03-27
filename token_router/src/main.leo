@@ -12,20 +12,6 @@
 
 program token_router.aleo {
 
-    // ── Constants ────────────────────────────────────────────────────
-    // Network ID for all .aleo programs (fixed encoding).
-    const NETWORK_ALEO: field = 1868917857field;
-
-    // ARC-20 function IDs — field-encoded function names.
-    // These are the same constants used by the AMM and any program that
-    // dynamically dispatches to ARC-20 tokens.
-    const TRANSFER_FROM_PUBLIC_ID: field =
-        567541106188061564941814004975800285532843504244field;
-    const TRANSFER_PUBLIC_TO_PRIVATE_ID: field =
-        163031276046149327277138208237194600527678254627957973064970868field;
-    const TRANSFER_PRIVATE_TO_PUBLIC_ID: field =
-        159748619646624572882733203183532374243803035081386454010655348field;
-
     @noupgrade
     constructor() {}
 
@@ -50,8 +36,8 @@ program token_router.aleo {
         // token program identified by `token_id`.
         let transfer_future: Final = _dynamic_call::[Final](
             token_id,
-            NETWORK_ALEO,
-            TRANSFER_FROM_PUBLIC_ID,
+            'aleo',
+            'transfer_from_public',
             from,
             to,
             amount
@@ -78,8 +64,8 @@ program token_router.aleo {
         // on the token program. Returns (change_record, future).
         let (change, deposit_future): (dyn record, Final) = _dynamic_call::[address, u128, dyn record, (dyn record, Final)](
             token_id,
-            NETWORK_ALEO,
-            TRANSFER_PRIVATE_TO_PUBLIC_ID,
+            'aleo',
+            'transfer_private_to_public',
             self.address,
             amount,
             token_record
@@ -104,8 +90,8 @@ program token_router.aleo {
         // on the token program. Returns (token_record, future).
         let (token_record, withdraw_future): (dyn record, Final) = _dynamic_call::[address, u128, (dyn record, Final)](
             token_id,
-            NETWORK_ALEO,
-            TRANSFER_PUBLIC_TO_PRIVATE_ID,
+            'aleo',
+            'transfer_public_to_private',
             recipient,
             amount
         );
