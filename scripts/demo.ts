@@ -85,8 +85,7 @@ async function demo() {
   }
 
   // ── Step 3: Route transfers via dynamic dispatch ──────────────────
-  const routerExecutor = new TransactionExecutor(aleoClient, config.programId);
-  routerExecutor.setExtraImportPrograms(TOKEN_PROGRAM_IDS);
+  const routerExecutor = new TransactionExecutor(aleoClient, config.programId, TOKEN_PROGRAM_IDS);
 
   for (let i = 0; i < TOKEN_NAMES.length; i++) {
     console.log(`\n=== Route ${TOKEN_NAMES[i]} Transfer (Dynamic Dispatch) ===\n`);

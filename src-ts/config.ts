@@ -65,8 +65,10 @@ export interface Config {
   network: string;
   /** RPC endpoint URL */
   rpcUrl: string;
-  /** Whether this is a local devnet (adds --devnet flag to leo CLI) */
+  /** Whether this is a local devnet */
   devnet: boolean;
+  /** Execution backend: "sdk" or "cli" */
+  backend: "sdk" | "cli";
   /** The router program ID */
   programId: string;
   /** Ordered list of private keys loaded from PRIVATE_KEY_0, PRIVATE_KEY_1, ... */
@@ -82,13 +84,18 @@ function buildConfig(): Config {
 
   // Fall back to devnode keys if no keys configured
   if (privateKeys.length === 0) {
+    console.warn("Warning: No PRIVATE_KEY_0 configured — using default devnode keys.");
     privateKeys.push(DEVNODE_KEY_0, DEVNODE_KEY_1);
   }
+
+  const devnet = process.env.DEVNET === "true";
+  const backend = (process.env.BACKEND as "sdk" | "cli") || (devnet ? "sdk" : "cli");
 
   return {
     network: process.env.NETWORK || "testnet",
     rpcUrl: process.env.ENDPOINT || "http://localhost:3030",
-    devnet: process.env.DEVNET === "true",
+    devnet,
+    backend,
     programId: "token_router.aleo",
     privateKeys,
   };

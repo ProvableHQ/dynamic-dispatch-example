@@ -14,37 +14,37 @@ const ROUTER_DIR = resolve(PROJECT_DIR, "token_router");
 const LEO_BIN = process.env.LEO_BIN || "leo";
 
 /**
- * Transaction executor with two backends:
+ * Transaction executor with two backends (sdk, cli) x two modes (devnet, live):
  *
- * - **Devnet** (DEVNET=true): Uses the SDK's `buildDevnodeExecutionTransaction`
- *   which skips proof generation and matches the VKs from SDK-deployed programs.
+ * | Backend | Devnet              | Live Network              |
+ * |---------|---------------------|---------------------------|
+ * | sdk     | buildDevnodeTx      | buildExecutionTransaction |
+ * | cli     | leo execute (local) | leo execute (remote)      |
  *
- * - **Live networks** (DEVNET unset): Uses `leo execute` CLI which generates
- *   real proofs and works with `leo deploy`-deployed programs on any network.
+ * Controlled by BACKEND (sdk|cli) and DEVNET (true|false) in .env.
  */
 export class TransactionExecutor {
   private aleoClient: AleoClient;
   private programId: string;
+  private dynamicImportIds: string[] = [];
+  private resolvedImports: Record<string, string> | null = null;
 
-  // SDK state (shared across instances for devnet)
+  // SDK state (shared across instances)
   private static sdkInitialized = false;
   private static programManager: any = null;
   private static networkClient: any = null;
-  private extraImportPrograms: string[] = [];
-  private cachedImports: Record<string, string> | null = null;
-
-  constructor(aleoClient?: AleoClient, programId?: string) {
-    this.aleoClient = aleoClient || new AleoClient();
-    this.programId = programId || config.programId;
-  }
 
   /**
-   * Register programs called via _dynamic_call at runtime.
-   * Only needed for devnet (SDK path) — the leo CLI resolves these from the network.
+   * @param aleoClient  RPC client
+   * @param programId   Program to execute on (default: token_router.aleo)
+   * @param dynamicImports  Program IDs called via `call.dynamic` at runtime.
+   *   The SDK can't discover these from static imports, so they must be
+   *   provided explicitly. The CLI backend ignores this (it resolves from the network).
    */
-  setExtraImportPrograms(programIds: string[]): void {
-    this.extraImportPrograms = programIds;
-    this.cachedImports = null;
+  constructor(aleoClient?: AleoClient, programId?: string, dynamicImports?: string[]) {
+    this.aleoClient = aleoClient || new AleoClient();
+    this.programId = programId || config.programId;
+    this.dynamicImportIds = dynamicImports || [];
   }
 
   // ── Public API ──────────────────────────────────────────────────
@@ -55,10 +55,7 @@ export class TransactionExecutor {
     inputs: string[],
     fee: number = 1_000_000,
   ): Promise<TransactionResult> {
-    if (config.devnet) {
-      return this.executeSDK(privateKey, this.programId, transition, inputs, fee);
-    }
-    return this.executeCLI(privateKey, this.programId, transition, inputs, fee);
+    return this.dispatch(privateKey, this.programId, transition, inputs, fee);
   }
 
   async executeOnProgram(
@@ -68,24 +65,42 @@ export class TransactionExecutor {
     inputs: string[],
     fee: number = 1_000_000,
   ): Promise<TransactionResult> {
-    if (config.devnet) {
-      return this.executeSDK(privateKey, programName, transition, inputs, fee);
-    }
-    return this.executeCLI(privateKey, programName, transition, inputs, fee);
+    return this.dispatch(privateKey, programName, transition, inputs, fee);
   }
 
   getAddress(privateKey: string): string {
     return new Account({ privateKey }).address().to_string();
   }
 
-  // ── SDK backend (devnet) ────────────────────────────────────────
+  // ── Dispatch ──────────────────────────────────────────────────
+
+  private dispatch(
+    privateKey: string,
+    programName: string,
+    transition: string,
+    inputs: string[],
+    fee: number,
+  ): Promise<TransactionResult> {
+    if (config.backend === "sdk") {
+      return this.executeSDK(privateKey, programName, transition, inputs, fee);
+    }
+    return this.executeCLI(privateKey, programName, transition, inputs, fee);
+  }
+
+  // ── SDK backend ──────────────────────────────────────────────
 
   private async ensureSDK(): Promise<void> {
     if (TransactionExecutor.sdkInitialized) return;
-    const { initThreadPool, getOrInitConsensusVersionTestHeights, ProgramManager, AleoKeyProvider, AleoNetworkClient } =
+    const { initThreadPool, ProgramManager, AleoKeyProvider, AleoNetworkClient } =
       await import("@provablehq/sdk");
     await initThreadPool();
-    getOrInitConsensusVersionTestHeights("0,1,2,3,4,5,6,7,8,9,10,11,12,13");
+
+    // Consensus test heights only needed for devnet
+    if (config.devnet) {
+      const { getOrInitConsensusVersionTestHeights } = await import("@provablehq/sdk");
+      getOrInitConsensusVersionTestHeights("0,1,2,3,4,5,6,7,8,9,10,11,12,13");
+    }
+
     const keyProvider = new AleoKeyProvider();
     keyProvider.useCache(true);
     TransactionExecutor.programManager = new ProgramManager(config.rpcUrl, keyProvider, undefined);
@@ -93,31 +108,20 @@ export class TransactionExecutor {
     TransactionExecutor.sdkInitialized = true;
   }
 
-  private async getExtraImports(): Promise<Record<string, string>> {
-    if (this.extraImportPrograms.length === 0) return {};
-    if (this.cachedImports) return this.cachedImports;
+  /**
+   * Fetch and cache program sources for dynamic imports.
+   * Only needed for the SDK backend — the CLI resolves these from the network.
+   */
+  private async resolveDynamicImports(): Promise<Record<string, string> | undefined> {
+    if (this.dynamicImportIds.length === 0) return undefined;
+    if (this.resolvedImports) return this.resolvedImports;
     const imports: Record<string, string> = {};
-    for (const id of this.extraImportPrograms) {
+    for (const id of this.dynamicImportIds) {
       const source = await this.aleoClient.getProgram(id);
       if (source) imports[id] = source;
     }
-    this.cachedImports = imports;
+    this.resolvedImports = imports;
     return imports;
-  }
-
-  private async buildProgramWithExtraImports(
-    extraImports: Record<string, string>,
-    targetProgram: string,
-  ): Promise<string | undefined> {
-    if (Object.keys(extraImports).length === 0) return undefined;
-    const programSource = await this.aleoClient.getProgram(targetProgram);
-    if (!programSource) return undefined;
-    const importLines = Object.keys(extraImports)
-      .filter((id) => !programSource.includes(`import ${id};`))
-      .map((id) => `import ${id};`)
-      .join("\n");
-    if (!importLines) return undefined;
-    return importLines + "\n" + programSource;
   }
 
   private async executeSDK(
@@ -128,7 +132,7 @@ export class TransactionExecutor {
     fee: number,
   ): Promise<TransactionResult> {
     try {
-      console.log(`Executing ${programName}::${transition}`, inputs);
+      console.log(`[SDK] Executing ${programName}::${transition}`, inputs);
       await this.ensureSDK();
 
       const { PrivateKey, Account: Acct } = await import("@provablehq/sdk");
@@ -136,36 +140,39 @@ export class TransactionExecutor {
       const networkClient = TransactionExecutor.networkClient;
       programManager.setAccount(new Acct({ privateKey }));
 
-      // Dynamic dispatch imports (only for router program)
-      const extraImports = programName === this.programId ? await this.getExtraImports() : {};
-      const mergedImports = Object.keys(extraImports).length > 0 ? extraImports : undefined;
-      const modifiedSource = mergedImports
-        ? await this.buildProgramWithExtraImports(mergedImports, programName)
+      // Provide dynamic import sources when executing the router program
+      const imports = programName === this.programId
+        ? await this.resolveDynamicImports()
         : undefined;
 
-      const tx = await programManager.buildDevnodeExecutionTransaction({
+      const options = {
         programName,
         functionName: transition,
         priorityFee: fee / 1_000_000,
         privateFee: false,
         inputs,
         privateKey: PrivateKey.from_string(privateKey),
-        imports: mergedImports,
-        ...(modifiedSource ? { program: modifiedSource } : {}),
-      });
+        ...(imports ? { imports } : {}),
+      };
+
+      // Devnet: skip proof generation. Live: generate real proofs.
+      const tx = config.devnet
+        ? await programManager.buildDevnodeExecutionTransaction(options)
+        : await programManager.buildExecutionTransaction(options);
 
       const txId = tx.id();
       await networkClient.submitTransaction(tx.toString());
       console.log(`Transaction submitted: ${txId}`);
-      return this.aleoClient.waitForTransaction(txId, 60000);
+      const timeout = config.devnet ? 60000 : 180000;
+      return this.aleoClient.waitForTransaction(txId, timeout);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error("Execution error:", msg.substring(0, 300));
+      console.error("Execution error:", msg.substring(0, 500));
       return { transactionId: "", status: "rejected", error: msg };
     }
   }
 
-  // ── CLI backend (live networks) ─────────────────────────────────
+  // ── CLI backend ──────────────────────────────────────────────
 
   private buildFlags(privateKey: string, extraFlags: string[] = []): string {
     return [
@@ -184,10 +191,9 @@ export class TransactionExecutor {
    * Other program commands run from the project root.
    */
   private runLeo(command: string, timeoutMs: number = 600000): string {
-    // Run from token_router/ for router commands so leo finds program.json with deps
     const isRouterCmd = command.includes(this.programId);
     const cwd = isRouterCmd ? ROUTER_DIR : PROJECT_DIR;
-    console.log(`Running: leo ${command.substring(0, 120)}...`);
+    console.log(`[CLI] Running: leo ${command.substring(0, 120)}...`);
     try {
       const output = execSync(`${LEO_BIN} ${command}`, {
         cwd,
@@ -220,7 +226,7 @@ export class TransactionExecutor {
       const inputStr = inputs.map((i) => `'${i}'`).join(" ");
       const flags = this.buildFlags(privateKey, [`--priority-fees ${fee}`]);
 
-      console.log(`Executing ${programName}::${transition}`, inputs);
+      console.log(`[CLI] Executing ${programName}::${transition}`, inputs);
       const txId = this.runLeo(`execute ${functionName} ${inputStr} ${flags}`);
 
       if (!txId) {
@@ -230,7 +236,7 @@ export class TransactionExecutor {
       return this.aleoClient.waitForTransaction(txId);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
-      console.error("Execution error:", msg.substring(0, 300));
+      console.error("Execution error:", msg.substring(0, 500));
       return { transactionId: "", status: "rejected", error: msg };
     }
   }

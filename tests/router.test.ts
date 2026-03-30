@@ -27,7 +27,7 @@ const RECIPIENT_KEY = config.privateKeys[1] || config.privateKeys[0];
 // The bundled example tokens
 const TOKA_ID = identifierToField("toka_token");
 const TOKB_ID = identifierToField("tokb_token");
-const TOKEN_PROGRAM_IDS = ["toka_token.aleo", "tokb_token.aleo"];
+const TOKEN_PROGRAMS = ["toka_token.aleo", "tokb_token.aleo"];
 
 describe("Token Router — Dynamic Dispatch", function () {
   this.timeout(600_000);
@@ -60,15 +60,12 @@ describe("Token Router — Dynamic Dispatch", function () {
       throw new Error(`${config.programId} not deployed. Run: npx tsx scripts/deploy.ts`);
     }
 
-    // Set up router executor with dynamic dispatch imports
-    // (needed for SDK backend — leo CLI resolves these automatically)
-    routerExecutor = new TransactionExecutor(aleoClient, config.programId);
-    routerExecutor.setExtraImportPrograms(TOKEN_PROGRAM_IDS);
+    routerExecutor = new TransactionExecutor(aleoClient, config.programId, TOKEN_PROGRAMS);
 
     // Mint tokens and approve router
     console.log("Setup: minting tokens and approving router...");
 
-    for (const token of TOKEN_PROGRAM_IDS) {
+    for (const token of TOKEN_PROGRAMS) {
       const mint = await executor.executeOnProgram(
         SENDER_KEY,
         token,
@@ -148,8 +145,7 @@ describe("Token Router — Dynamic Dispatch", function () {
       if (recordValue.startsWith("record1") || recordValue.startsWith("ciphertext")) {
         const decrypted = decryptAndFormatRecord(SENDER_KEY, recordValue);
         if (!decrypted) {
-          console.log("Could not decrypt record — skipping deposit test");
-          return;
+          this.skip();  // Mark as skipped so CI doesn't show a false pass
         }
         recordValue = decrypted;
       }

@@ -1,6 +1,103 @@
 # Dynamic Dispatch in Leo — Example Project
 
-A minimal, self-contained example showing how to use **dynamic dispatch** (`_dynamic_call`) in Leo programs with full SDK integration. Deploy and run on a local devnet.
+A minimal, self-contained example showing how to use **dynamic dispatch** (`_dynamic_call`) in Leo programs with full SDK integration.
+
+---
+
+## Prerequisites
+
+### Leo Compiler
+
+Requires the `feat/dynamic-dispatch-intrinsics` branch of Leo (or any build that includes the dynamic call intrinsics and record translation VK support):
+
+```bash
+cd <path-to-leo-repo>
+git checkout feat/dynamic-dispatch-intrinsics
+cargo install --path .
+```
+
+Verify: `leo --version` should report the `feat/dynamic-dispatch-intrinsics` branch.
+
+### SDK
+
+```bash
+npm install
+```
+
+This installs `@provablehq/sdk` v0.10.0 and its prebuilt WASM from npm. No build-from-source step required.
+
+### Preflight Check
+
+Verify everything is set up correctly:
+
+```bash
+DOTENV=devnet npm run preflight    # for local development
+DOTENV=testnet npm run preflight   # for testnet
+```
+
+---
+
+## Execution Backends
+
+Two backends (`BACKEND`), two network modes (`DEVNET`):
+
+| | **SDK** (`BACKEND=sdk`) | **Leo CLI** (`BACKEND=cli`) |
+|---|---|---|
+| **Devnet** (`DEVNET=true`) | No proofs, fastest iteration | Real proofs, local node |
+| **Live** (`DEVNET=false`) | Real proofs via WASM | Real proofs via `leo execute` |
+
+Defaults: `sdk` on devnet, `cli` on live. Override with `BACKEND` in your `.env` file.
+
+---
+
+## Local Development (devnet)
+
+### 1. Start the devnode
+
+```bash
+leo devnode start --network testnet \
+  --consensus-heights "0,1,2,3,4,5,6,7,8,9,10,11,12,13" \
+  --private-key APrivateKey1zkp8CZNn3yeCseEtxuVPbDCwSyhGW6yZKUYKfgXmcpoGPWH
+```
+
+### 2. Build, deploy, test
+
+```bash
+DOTENV=devnet npm run build:leo
+DOTENV=devnet npm run deploy          # default: BACKEND=sdk (no proofs)
+DOTENV=devnet npm test
+```
+
+To generate real proofs against the local devnode instead:
+
+```bash
+DOTENV=devnet BACKEND=cli npm run deploy
+DOTENV=devnet BACKEND=cli npm test
+```
+
+---
+
+## Live Networks (testnet / canary)
+
+### 1. Configure environment
+
+Create `.env.testnet` (or `.env.canary`):
+
+```env
+NETWORK=testnet
+ENDPOINT=https://api.explorer.provable.com/v2
+DEVNET=false
+PRIVATE_KEY_0=APrivateKey1...   # deployer / sender
+PRIVATE_KEY_1=APrivateKey1...   # recipient (for tests)
+```
+
+### 2. Build, deploy, test
+
+```bash
+DOTENV=testnet npm run build:leo
+DOTENV=testnet npm run deploy          # default: BACKEND=cli (leo deploy)
+DOTENV=testnet npm test                # ~5 min (proof generation + block confirmation)
+```
 
 ---
 
@@ -21,22 +118,32 @@ This is the key enabler for generic protocols like DEXs, lending markets, and br
 ```leo
 let future: Final = _dynamic_call::[Final](
     program_id,      // field — which program to call (runtime)
-    network_id,      // field — always 1868917857field for .aleo
+    network_id,      // 'aleo' — identifier literal, compiles to 1868917857field
     function_id,     // field — which function to call (encoded name)
     arg1, arg2, ...  // the function's arguments
 );
 ```
 
-The return type(s) go in the `::[...]` turbofish syntax. Common patterns:
+The turbofish `::[...]` lists the **input types**, then the **return type** as the last element. When the function returns multiple values, wrap the return in a tuple. For example, calling `transfer_private_to_public(to: address, amount: u128, token: Token) -> (Token, Final)`:
 
-| Pattern | Return | Use Case |
-|---------|--------|----------|
-| `_dynamic_call::[Final](...)` | Future only | Public transfers |
-| `_dynamic_call::[dyn record, Final](...)` | Record + future | Private ↔ public conversions |
+```leo
+let (change, future): (dyn record, Final) = _dynamic_call::[address, u128, dyn record, (dyn record, Final)](
+    token_id, 'aleo', 'transfer_private_to_public',
+    self.address, amount, token_record
+);
+```
+
+Common patterns:
+
+| Turbofish | Meaning |
+|-----------|---------|
+| `::[Final]` | No inputs, returns a future |
+| `::[address, u128, Final]` | Two inputs, returns a future |
+| `::[address, u128, dyn record, (dyn record, Final)]` | Three inputs, returns a record + future |
 
 ### Function ID Constants
 
-Function names are encoded as field elements. These are standard across all ARC-20 tokens:
+Function names are field-encoded the same way as program names (see `identifierToField` below). For example, `identifierToField("transfer_from_public")` produces the first constant. These are standard across all ARC-20 tokens:
 
 ```leo
 const TRANSFER_FROM_PUBLIC_ID: field =
@@ -123,7 +230,7 @@ fn route_transfer(
 }
 ```
 
-### 2. `route_deposit` — Private → Public
+### 2. `route_deposit` — Private -> Public
 
 Accepts a `dyn record` (a private token record of unknown type) and converts it to a public balance.
 
@@ -141,7 +248,7 @@ fn route_deposit(
 }
 ```
 
-### 3. `route_withdraw` — Public → Private
+### 3. `route_withdraw` — Public -> Private
 
 Sends public balance as a private record to a recipient.
 
@@ -161,125 +268,33 @@ fn route_withdraw(
 
 ---
 
-## How the SDK Handles Dynamic Dispatch
-
-Programs called via `_dynamic_call` are resolved at **execution time**, not compile time. But the SDK/SnarkVM still needs their bytecode loaded to build the transaction.
-
-The SDK's `resolve_imports` only handles programs in the static `import` list. Since dynamically-called programs aren't imported, we work around this by **injecting fake import statements** into the program source before building the transaction:
-
-```typescript
-// Tell the executor which programs will be called dynamically
-executor.setExtraImportPrograms(["toka.aleo", "tokb.aleo"]);
-
-// Internally, this prepends:
-//   import toka.aleo;
-//   import tokb.aleo;
-// to the on-chain program source before calling buildDevnodeExecutionTransaction.
-// This tricks resolve_imports into loading these programs into the SnarkVM process.
-```
-
-See `src-ts/client/transaction-executor.ts` for the full implementation.
-
----
-
-## Prerequisites
-
-### 1. Leo Compiler (Dynamic Dispatch Branch)
-
-The `_dynamic_call` intrinsic requires the dynamic dispatch Leo branch:
-
-```bash
-cd <path-to-leo-repo>
-git checkout feat/dynamic-dispatch-intrinsics
-cargo build --release -p leo-lang
-cp target/release/leo ~/.cargo/bin/leo
-```
-
-### 2. SDK (Dynamic Dispatch Branch)
-
-```bash
-cd <this-project>
-git submodule update --init --recursive
-
-cd sdk
-yarn install
-yarn build:wasm    # ~20-30 min first time (Rust compilation)
-yarn build:sdk     # ~30 sec
-cd ..
-
-npm install
-
-# Copy the WASM dist into node_modules (npm doesn't follow the local build)
-cp -r sdk/wasm/dist node_modules/@provablehq/wasm/dist
-```
-
----
-
-## Quick Start
-
-### 1. Build the Leo programs
-
-```bash
-cd toka_token && leo build && cd ..
-cd tokb_token && leo build && cd ..
-cd token_router && leo build && cd ..
-```
-
-### 2. Start the devnode
-
-```bash
-leo devnode start --network testnet --consensus-heights "0,1,2,3,4,5,6,7,8,9,10,11,12,13" --private-key APrivateKey1zkp8CZNn3yeCseEtxuVPbDCwSyhGW6yZKUYKfgXmcpoGPWH
-```
-
-The `--consensus-heights` flag advances through all consensus versions automatically (no manual `leo devnode advance` needed). Programs using `aleo::GENERATOR` require ConsensusV14.
-
-### 3. Deploy programs
-
-```bash
-npx tsx scripts/deploy.ts
-```
-
-> **Important:** Always deploy via the SDK script, not `leo deploy`. The Leo CLI generates verifying keys that are incompatible with the SDK's execution path.
-
-### 4. Run the demo
-
-```bash
-npx tsx scripts/demo.ts
-```
-
-### 5. Run tests
-
-```bash
-npm test
-```
-
----
-
 ## Project Structure
 
 ```
 dynamic-dispatch-example/
-├── token_router/                         # Token Router program (~155 lines)
+├── token_router/                         # Token Router program
 │   ├── src/main.leo                      # 3 transitions: route_transfer, route_deposit, route_withdraw
 │   └── program.json
 ├── toka_token/                           # Sample ARC-20 token A
-│   ├── src/main.leo                      # approve, transfer_from, mint, private↔public
+│   ├── src/main.leo
 │   └── program.json
 ├── tokb_token/                           # Sample ARC-20 token B (identical interface)
 │   ├── src/main.leo
 │   └── program.json
 ├── scripts/
+│   ├── build-programs.ts                 # Build all Leo programs + copy imports
 │   ├── deploy.ts                         # Deploy all 3 programs (SDK for devnet, CLI for live)
-│   └── demo.ts                           # End-to-end demo
+│   ├── demo.ts                           # End-to-end demo
+│   └── preflight.ts                      # Environment validation
 ├── src-ts/
 │   ├── client/
-│   │   ├── aleo-client.ts                # Devnode RPC client
-│   │   └── transaction-executor.ts       # SDK wrapper + dynamic import injection
-│   ├── config.ts                         # Environment config
+│   │   ├── aleo-client.ts                # RPC client (works with any network)
+│   │   └── transaction-executor.ts       # SDK (devnet) or CLI (live) execution
+│   ├── config.ts                         # Environment config (DOTENV= switching)
 │   ├── utils.ts                          # identifierToField() helper
 │   └── types.ts                          # TypeScript types
 ├── tests/router.test.ts                  # Mocha tests (6 scenarios)
-├── sdk/                                  # @provablehq/sdk submodule (feat/dynamic-dispatch)
+├── sdk/                                  # @provablehq/sdk submodule
 ├── package.json
 └── README.md
 ```

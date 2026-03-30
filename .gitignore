@@ -1,6 +1,7 @@
 node_modules/
 dist/
 build/
+outputs/
 # Ignore all .env files EXCEPT examples and the bundled devnet config
 .env
 .env.*
@@ -9,3 +10,7 @@ build/
 *.js
 *.d.ts
 *.js.map
+# Claude Code
+.claude/
+CLAUDE.md
+**/CLAUDE.md

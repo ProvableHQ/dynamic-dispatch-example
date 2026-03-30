@@ -31,16 +31,18 @@ const PROGRAMS = [
   { name: "token_router.aleo", dir: "token_router" },
 ];
 
-// ── SDK deploy (devnet) ─────────────────────────────────────────────
+// ── SDK deploy ──────────────────────────────────────────────────────
 
 let sdkInitialized = false;
 
 async function ensureSDKInitialized() {
   if (sdkInitialized) return;
-  const { initThreadPool, getOrInitConsensusVersionTestHeights } =
-    await import("@provablehq/sdk");
+  const { initThreadPool } = await import("@provablehq/sdk");
   await initThreadPool();
-  getOrInitConsensusVersionTestHeights("0,1,2,3,4,5,6,7,8,9,10,11,12,13");
+  if (config.devnet) {
+    const { getOrInitConsensusVersionTestHeights } = await import("@provablehq/sdk");
+    getOrInitConsensusVersionTestHeights("0,1,2,3,4,5,6,7,8,9,10,11,12,13");
+  }
   sdkInitialized = true;
 }
 
@@ -61,17 +63,26 @@ async function deployWithSDK(
   const programManager = new ProgramManager(config.rpcUrl, keyProvider, undefined);
   programManager.setAccount(new Account({ privateKey: deployerKey }));
 
-  const tx = await programManager.buildDevnodeDeploymentTransaction({
+  const deployOptions = {
     program: programSource,
     priorityFee: 5,
     privateFee: false,
     privateKey: PrivateKey.from_string(deployerKey),
-  });
+  };
+
+  // Devnet: skip proof generation. Live: generate real proofs.
+  const tx = config.devnet
+    ? await programManager.buildDevnodeDeploymentTransaction(deployOptions)
+    : await programManager.buildDeploymentTransaction(
+        programSource, deployOptions.priorityFee, deployOptions.privateFee,
+        undefined, undefined, deployOptions.privateKey,
+      );
 
   const txId = tx.id();
   await networkClient.submitTransaction(tx.toString());
   console.log(`  Submitted: ${txId}`);
-  const result = await aleoClient.waitForTransaction(txId, 120000);
+  const timeout = config.devnet ? 120000 : 300000;
+  const result = await aleoClient.waitForTransaction(txId, timeout);
   return { status: result.status, error: result.error };
 }
 
@@ -139,7 +150,7 @@ async function deploy() {
   console.log(`Network:  ${config.network}${config.devnet ? " (devnet)" : ""}`);
   console.log(`Endpoint: ${config.rpcUrl}`);
   console.log(`Deployer: ${executor.getAddress(deployerKey)}`);
-  console.log(`Method:   ${config.devnet ? "SDK" : "leo deploy"}\n`);
+  console.log(`Backend:  ${config.backend}${config.devnet ? " (devnode, no proofs)" : " (real proofs)"}\n`);
 
   const deployed: string[] = [];
 
@@ -154,12 +165,19 @@ async function deploy() {
     const projectDir = resolve(ROOT, prog.dir);
 
     let result: { status: string; error?: string };
-    if (config.devnet) {
+    if (config.backend === "sdk") {
       const source = readFileSync(resolve(projectDir, "build/main.aleo"), "utf-8");
       result = await deployWithSDK(deployerKey, source, aleoClient);
     } else {
-      // Skip already-deployed dependencies so leo deploy doesn't try to redeploy them
-      result = await deployWithCLI(deployerKey, projectDir, aleoClient, deployed);
+      // Build a fresh skip list by checking what's actually on-chain.
+      const skipList: string[] = [];
+      for (const dep of PROGRAMS) {
+        if (dep.name === prog.name) break;
+        if (await aleoClient.isProgramDeployed(dep.name)) {
+          skipList.push(dep.name);
+        }
+      }
+      result = await deployWithCLI(deployerKey, projectDir, aleoClient, skipList);
     }
 
     console.log(`  ${prog.name}: ${result.status}`, result.error || "");
