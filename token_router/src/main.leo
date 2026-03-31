@@ -40,7 +40,9 @@ program token_router.aleo {
         let transfer_future: Final = ARC20@(token_id)::transfer_from_public(from, to, amount);
 
         return final {
-            finalize_route_transfer(transfer_future, token_id, amount);
+            transfer_future.run();
+            let current: u128 = Mapping::get_or_use(routed_volume, token_id, 0u128);
+            routed_volume.set(token_id, current + amount);
         };
     }
 
@@ -59,7 +61,9 @@ program token_router.aleo {
         );
 
         return (change, final {
-            finalize_route_deposit(deposit_future, token_id, amount);
+            deposit_future.run();
+            let current: u128 = Mapping::get_or_use(routed_volume, token_id, 0u128);
+            routed_volume.set(token_id, current + amount);
         });
     }
 
@@ -77,39 +81,9 @@ program token_router.aleo {
         );
 
         return (token_record, final {
-            finalize_route_withdraw(withdraw_future, token_id, amount);
+            withdraw_future.run();
+            let current: u128 = Mapping::get_or_use(routed_volume, token_id, 0u128);
+            routed_volume.set(token_id, current + amount);
         });
     }
-}
-
-// ── Finalize Functions ───────────────────────────────────────────────
-
-final fn finalize_route_transfer(
-    transfer_future: Final,
-    token_id: field,
-    amount: u128
-) {
-    transfer_future.run();
-    let current: u128 = Mapping::get_or_use(routed_volume, token_id, 0u128);
-    routed_volume.set(token_id, current + amount);
-}
-
-final fn finalize_route_deposit(
-    deposit_future: Final,
-    token_id: field,
-    amount: u128
-) {
-    deposit_future.run();
-    let current: u128 = Mapping::get_or_use(routed_volume, token_id, 0u128);
-    routed_volume.set(token_id, current + amount);
-}
-
-final fn finalize_route_withdraw(
-    withdraw_future: Final,
-    token_id: field,
-    amount: u128
-) {
-    withdraw_future.run();
-    let current: u128 = Mapping::get_or_use(routed_volume, token_id, 0u128);
-    routed_volume.set(token_id, current + amount);
 }
