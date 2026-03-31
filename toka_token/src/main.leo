@@ -1,6 +1,16 @@
 // Minimal ARC-20 token for dynamic dispatch examples.
 
-program toka_token.aleo {
+interface ARC20 {
+    record Token;
+
+    fn approve_public(public spender: address, public amount: u128) -> Final;
+    fn unapprove_public(public spender: address, public amount: u128) -> Final;
+    fn transfer_from_public(public owner: address, public recipient: address, public amount: u128) -> Final;
+    fn transfer_public_to_private(recipient: address, public amount: u128) -> (Token, Final);
+    fn transfer_private_to_public(input: Token, to: address, amount: u128) -> (Token, Final);
+}
+
+program toka_token.aleo: ARC20 {
 
     record Token {
         owner: address,
@@ -18,19 +28,19 @@ program toka_token.aleo {
     @noupgrade
     constructor() {}
 
-    fn approve_public(spender: address, amount: u128) -> Final {
+    fn approve_public(public spender: address, public amount: u128) -> Final {
         let key: field = BHP256::hash_to_field(Allowance { account: self.signer, spender });
         return final { fin_approve_public(amount, key); };
     }
 
-    fn unapprove_public(spender: address, amount: u128) -> Final {
+    fn unapprove_public(public spender: address, public amount: u128) -> Final {
         let key: field = BHP256::hash_to_field(Allowance { account: self.signer, spender });
         return final { fin_unapprove_public(amount, key); };
     }
 
-    fn transfer_from_public(from: address, to: address, amount: u128) -> Final {
-        let key: field = BHP256::hash_to_field(Allowance { account: from, spender: self.caller });
-        return final { fin_transfer_from_public(from, to, amount, key); };
+    fn transfer_from_public(public owner: address, public recipient: address, public amount: u128) -> Final {
+        let key: field = BHP256::hash_to_field(Allowance { account: owner, spender: self.caller });
+        return final { fin_transfer_from_public(owner, recipient, amount, key); };
     }
 
     fn transfer_public_as_signer(to: address, amount: u128) -> Final {
@@ -43,15 +53,15 @@ program toka_token.aleo {
         return final { fin_transfer_public(from, to, amount); };
     }
 
-    fn transfer_private_to_public(to: address, amount: u128, token: Token) -> (Token, Final) {
-        let change: Token = Token { owner: token.owner, amount: token.amount - amount };
-        return (change, final { fin_transfer_priv_to_pub(to, amount); });
-    }
-
-    fn transfer_public_to_private(to: address, amount: u128) -> (Token, Final) {
-        let token: Token = Token { owner: to, amount };
+    fn transfer_public_to_private(recipient: address, public amount: u128) -> (Token, Final) {
+        let token: Token = Token { owner: recipient, amount };
         let from: address = self.caller;
         return (token, final { fin_transfer_pub_to_priv(from, amount); });
+    }
+
+    fn transfer_private_to_public(input: Token, to: address, amount: u128) -> (Token, Final) {
+        let change: Token = Token { owner: input.owner, amount: input.amount - amount };
+        return (change, final { fin_transfer_priv_to_pub(to, amount); });
     }
 
     fn mint_public(public to: address, public amount: u128) -> Final {

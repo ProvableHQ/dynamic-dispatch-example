@@ -95,7 +95,7 @@ export class AleoClient {
           return { transactionId, status: "rejected", error: "Finalize failed (fee-only tx)" };
         }
         // Rejected: explicit rejected field
-        if (txObj.type === "execute" && txObj.rejected !== undefined) {
+        if ((txObj.type === "execute" || txObj.type === "deploy") && txObj.rejected !== undefined) {
           return { transactionId, status: "rejected", error: `Finalize failed: ${JSON.stringify(txObj.rejected)}` };
         }
 

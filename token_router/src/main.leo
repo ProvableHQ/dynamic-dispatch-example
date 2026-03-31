@@ -2,13 +2,20 @@
 //
 // This program routes token operations to ANY ARC-20 token program at runtime,
 // without knowing the token program at compile time. The token program ID is
-// passed as a field parameter — the `_dynamic_call` intrinsic resolves it at
-// execution time.
+// passed as a field parameter — the interface call resolves it at execution time.
 //
 // Three transitions demonstrate the three core dynamic dispatch patterns:
-//   1. route_transfer  — _dynamic_call::[Final]            (public transfer)
-//   2. route_deposit   — dyn record input, returns change   (private → public)
-//   3. route_withdraw  — returns dyn record output          (public → private)
+//   1. route_transfer  — public transfer returning Final
+//   2. route_deposit   — dyn record input, returns change (private → public)
+//   3. route_withdraw  — returns dyn record output (public → private)
+
+interface ARC20 {
+    record Token;
+
+    fn transfer_from_public(public owner: address, public recipient: address, public amount: u128) -> Final;
+    fn transfer_public_to_private(recipient: address, public amount: u128) -> (dyn record, Final);
+    fn transfer_private_to_public(input: dyn record, to: address, amount: u128) -> (dyn record, Final);
+}
 
 program token_router.aleo {
 
@@ -24,24 +31,13 @@ program token_router.aleo {
     //
     // The caller must first approve this program (token_router.aleo) to
     // spend their tokens via the token program's `approve_public`.
-    //
-    // Pattern: _dynamic_call::[Final](...) — single future return.
     fn route_transfer(
         public token_id: field,
         public from: address,
         public to: address,
         public amount: u128
     ) -> Final {
-        // Dynamically call `transfer_from_public(from, to, amount)` on the
-        // token program identified by `token_id`.
-        let transfer_future: Final = _dynamic_call::[Final](
-            token_id,
-            'aleo',
-            'transfer_from_public',
-            from,
-            to,
-            amount
-        );
+        let transfer_future: Final = ARC20@(token_id)::transfer_from_public(from, to, amount);
 
         return final {
             finalize_route_transfer(transfer_future, token_id, amount);
@@ -51,24 +47,15 @@ program token_router.aleo {
     // ── Transition 2: Deposit (private → public) ─────────────────────
     // Accepts a private token record and converts it to public balance
     // held by this program.
-    //
-    // Pattern: _dynamic_call::[dyn record, Final](...) with `dyn record` input.
-    // The `dyn record` is a type-erased record — its concrete type is resolved
-    // at runtime based on `token_id`.
     fn route_deposit(
         public token_id: field,
         private token_record: dyn record,
         public amount: u128
     ) -> (dyn record, Final) {
-        // Dynamically call `transfer_private_to_public(recipient, amount, record)`
-        // on the token program. Returns (change_record, future).
-        let (change, deposit_future): (dyn record, Final) = _dynamic_call::[address, u128, dyn record, (dyn record, Final)](
-            token_id,
-            'aleo',
-            'transfer_private_to_public',
+        let (change, deposit_future): (dyn record, Final) = ARC20@(token_id)::transfer_private_to_public(
+            token_record,
             self.address,
-            amount,
-            token_record
+            amount
         );
 
         return (change, final {
@@ -79,19 +66,12 @@ program token_router.aleo {
     // ── Transition 3: Withdraw (public → private) ────────────────────
     // Sends public balance held by this program as a private record
     // to the recipient.
-    //
-    // Pattern: _dynamic_call::[dyn record, Final](...) returning `dyn record`.
     fn route_withdraw(
         public token_id: field,
         public recipient: address,
         public amount: u128
     ) -> (dyn record, Final) {
-        // Dynamically call `transfer_public_to_private(recipient, amount)`
-        // on the token program. Returns (token_record, future).
-        let (token_record, withdraw_future): (dyn record, Final) = _dynamic_call::[address, u128, (dyn record, Final)](
-            token_id,
-            'aleo',
-            'transfer_public_to_private',
+        let (token_record, withdraw_future): (dyn record, Final) = ARC20@(token_id)::transfer_public_to_private(
             recipient,
             amount
         );
@@ -103,18 +83,13 @@ program token_router.aleo {
 }
 
 // ── Finalize Functions ───────────────────────────────────────────────
-// In Leo, `final fn` declarations live outside the `program` block.
-// They execute on-chain after the transition completes, and can access
-// mappings and run futures from dynamic calls.
 
 final fn finalize_route_transfer(
     transfer_future: Final,
     token_id: field,
     amount: u128
 ) {
-    // Execute the dynamically dispatched transfer.
     transfer_future.run();
-    // Track cumulative volume.
     let current: u128 = Mapping::get_or_use(routed_volume, token_id, 0u128);
     routed_volume.set(token_id, current + amount);
 }

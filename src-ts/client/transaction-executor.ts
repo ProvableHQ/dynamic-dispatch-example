@@ -9,8 +9,6 @@ import { TransactionResult } from "../types.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const PROJECT_DIR = resolve(__dirname, "../..");
-const ROUTER_DIR = resolve(PROJECT_DIR, "token_router");
-
 const LEO_BIN = process.env.LEO_BIN || "leo";
 
 /**
@@ -38,8 +36,8 @@ export class TransactionExecutor {
    * @param aleoClient  RPC client
    * @param programId   Program to execute on (default: token_router.aleo)
    * @param dynamicImports  Program IDs called via `call.dynamic` at runtime.
-   *   The SDK can't discover these from static imports, so they must be
-   *   provided explicitly. The CLI backend ignores this (it resolves from the network).
+   *   The SDK needs these to fetch program sources for proof generation.
+   *   The CLI backend uses them to build the `--with` flag for `leo execute`.
    */
   constructor(aleoClient?: AleoClient, programId?: string, dynamicImports?: string[]) {
     this.aleoClient = aleoClient || new AleoClient();
@@ -186,13 +184,26 @@ export class TransactionExecutor {
   }
 
   /**
-   * Run a leo CLI command from the appropriate directory.
-   * Router commands run from token_router/ so leo resolves dependencies.
-   * Other program commands run from the project root.
+   * Build the --with flag value for dynamically-called programs.
+   * Resolves program IDs to their local .aleo build artifacts.
    */
-  private runLeo(command: string, timeoutMs: number = 600000): string {
-    const isRouterCmd = command.includes(this.programId);
-    const cwd = isRouterCmd ? ROUTER_DIR : PROJECT_DIR;
+  private buildWithFlag(): string | null {
+    if (this.dynamicImportIds.length === 0) return null;
+    const paths = this.dynamicImportIds.map((id) => {
+      const dir = id.replace(/\.aleo$/, "");
+      return resolve(PROJECT_DIR, dir, "build/main.aleo");
+    });
+    return paths.join(",");
+  }
+
+  /**
+   * Run a leo CLI command from the appropriate program directory.
+   * Each program must be run from its own directory so leo can find
+   * its program.json and build artifacts.
+   */
+  private runLeo(command: string, programName?: string, timeoutMs: number = 600000): string {
+    const dir = programName ? programName.replace(/\.aleo$/, "") : "";
+    const cwd = dir ? resolve(PROJECT_DIR, dir) : PROJECT_DIR;
     console.log(`[CLI] Running: leo ${command.substring(0, 120)}...`);
     try {
       const output = execSync(`${LEO_BIN} ${command}`, {
@@ -222,12 +233,21 @@ export class TransactionExecutor {
     fee: number,
   ): Promise<TransactionResult> {
     try {
-      const functionName = `${programName}/${transition}`;
       const inputStr = inputs.map((i) => `'${i}'`).join(" ");
-      const flags = this.buildFlags(privateKey, [`--priority-fees ${fee}`]);
+      const extraFlags = [`--priority-fees ${fee}`];
+
+      // Only add --with when executing on a program that has dynamic imports
+      if (programName === this.programId) {
+        const withFlag = this.buildWithFlag();
+        if (withFlag) {
+          extraFlags.push(`--with ${withFlag}`);
+        }
+      }
+
+      const flags = this.buildFlags(privateKey, extraFlags);
 
       console.log(`[CLI] Executing ${programName}::${transition}`, inputs);
-      const txId = this.runLeo(`execute ${functionName} ${inputStr} ${flags}`);
+      const txId = this.runLeo(`execute ${transition} ${inputStr} ${flags}`, programName);
 
       if (!txId) {
         return { transactionId: "", status: "rejected", error: "No transaction ID returned" };

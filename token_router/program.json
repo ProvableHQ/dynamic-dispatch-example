@@ -3,7 +3,8 @@
   "version": "0.1.0",
   "description": "Minimal example demonstrating dynamic dispatch in Leo",
   "license": "MIT",
-  "dependencies": [
+  "dependencies": [],
+  "dev_dependencies": [
     {
       "name": "toka_token.aleo",
       "location": "local",
@@ -14,6 +15,5 @@
       "location": "local",
       "path": "../tokb_token"
     }
-  ],
-  "dev_dependencies": []
+  ]
 }

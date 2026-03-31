@@ -1,9 +1,10 @@
 /**
- * Build all Leo programs in dependency order and copy imports.
+ * Build all Leo programs and copy dev-dependency imports.
  *
- * 1. Builds toka_token, tokb_token (leaf dependencies)
- * 2. Builds token_router (depends on both tokens)
- * 3. Copies built .aleo files into token_router/build/imports/
+ * 1. Builds toka_token, tokb_token (leaf programs)
+ * 2. Builds token_router (uses interface calls at runtime via --with)
+ * 3. Copies token .aleo files into token_router/build/imports/ so
+ *    `leo test` can resolve dev_dependencies
  *
  * Usage:
  *   DOTENV=testnet npx tsx scripts/build-programs.ts
@@ -24,8 +25,9 @@ const PROGRAMS = [
   { name: "token_router", dir: "token_router" },
 ];
 
-// token_router depends on these — their .aleo files need to be in its build/imports/
-const ROUTER_IMPORTS = ["toka_token", "tokb_token"];
+// token_router lists these as dev_dependencies — their .aleo files must be
+// in build/imports/ for `leo test` to work.
+const ROUTER_DEV_DEPS = ["toka_token", "tokb_token"];
 
 function buildProgram(dir: string): void {
   const projectDir = resolve(ROOT, dir);
@@ -46,11 +48,11 @@ function buildProgram(dir: string): void {
   }
 }
 
-function copyImports(): void {
+function copyDevDeps(): void {
   const importsDir = resolve(ROOT, "token_router/build/imports");
   mkdirSync(importsDir, { recursive: true });
 
-  for (const dep of ROUTER_IMPORTS) {
+  for (const dep of ROUTER_DEV_DEPS) {
     const src = resolve(ROOT, dep, "build/main.aleo");
     const dst = resolve(importsDir, `${dep}.aleo`);
     if (!existsSync(src)) {
@@ -62,13 +64,12 @@ function copyImports(): void {
   }
 }
 
-// Build all programs in order
 for (const prog of PROGRAMS) {
   buildProgram(prog.dir);
 }
 
-// Copy dependency .aleo files into token_router/build/imports/
-console.log("\nCopying imports for token_router...");
-copyImports();
+// Copy dev-dependency .aleo files for `leo test`
+console.log("\nCopying dev-dependency imports for token_router...");
+copyDevDeps();
 
 console.log("\nAll programs built.");

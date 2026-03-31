@@ -1,6 +1,6 @@
 # Dynamic Dispatch in Leo — Example Project
 
-A minimal, self-contained example showing how to use **dynamic dispatch** (`_dynamic_call`) in Leo programs with full SDK integration.
+A minimal, self-contained example showing how to use **interface-based dynamic dispatch** in Leo programs with full SDK integration.
 
 ---
 
@@ -8,15 +8,15 @@ A minimal, self-contained example showing how to use **dynamic dispatch** (`_dyn
 
 ### Leo Compiler
 
-Requires the `feat/dynamic-dispatch-intrinsics` branch of Leo (or any build that includes the dynamic call intrinsics and record translation VK support):
+Requires a Leo build with interface calls and the `--with` flag for runtime program resolution:
 
 ```bash
 cd <path-to-leo-repo>
-git checkout feat/dynamic-dispatch-intrinsics
+git checkout feat/with-flag-extra-programs
 cargo install --path .
 ```
 
-Verify: `leo --version` should report the `feat/dynamic-dispatch-intrinsics` branch.
+Verify: `leo --version` should report the correct branch.
 
 ### SDK
 
@@ -47,6 +47,8 @@ Two backends (`BACKEND`), two network modes (`DEVNET`):
 | **Live** (`DEVNET=false`) | Real proofs via WASM | Real proofs via `leo execute` |
 
 Defaults: `sdk` on devnet, `cli` on live. Override with `BACKEND` in your `.env` file.
+
+The CLI backend uses the `--with` flag to provide dynamically-called programs to the VM at runtime.
 
 ---
 
@@ -105,7 +107,7 @@ DOTENV=testnet npm test                # ~5 min (proof generation + block confir
 
 In most Leo programs, cross-program calls are **static** — you write `token.aleo/transfer_public(...)` and the compiler knows exactly which program and function you're calling. This works well, but it means your program can only interact with programs it knows about at compile time.
 
-**Dynamic dispatch** breaks this limitation. Instead of hardcoding the target program, you pass a **program ID as a runtime parameter**. The `_dynamic_call` intrinsic resolves the target program at execution time, allowing a single function to call *any* program that implements a compatible interface.
+**Dynamic dispatch** breaks this limitation. Instead of hardcoding the target program, you pass a **program ID as a runtime parameter**. An `interface` declaration describes the functions the target program must provide, and the `ARC20@(token_id)::method(...)` syntax resolves the target at execution time. This allows a single function to call *any* program that implements a compatible interface.
 
 This is the key enabler for generic protocols like DEXs, lending markets, and bridges — any protocol that needs to work with arbitrary tokens or programs deployed after it.
 
@@ -113,50 +115,42 @@ This is the key enabler for generic protocols like DEXs, lending markets, and br
 
 ## How It Works in Leo
 
-### The `_dynamic_call` Intrinsic
+### Interfaces
+
+An `interface` declares the contract that target programs must satisfy. This project uses a subset of the [ARC-20 token standard](https://github.com/ProvableHQ/ARCs/discussions/124):
 
 ```leo
-let future: Final = _dynamic_call::[Final](
-    program_id,      // field — which program to call (runtime)
-    network_id,      // 'aleo' — identifier literal, compiles to 1868917857field
-    function_id,     // field — which function to call (encoded name)
-    arg1, arg2, ...  // the function's arguments
-);
+interface ARC20 {
+    record Token;
+
+    fn transfer_from_public(public owner: address, public recipient: address, public amount: u128) -> Final;
+    fn transfer_public_to_private(recipient: address, public amount: u128) -> (Token, Final);
+    fn transfer_private_to_public(input: Token, to: address, amount: u128) -> (Token, Final);
+}
 ```
 
-The turbofish `::[...]` lists the **input types**, then the **return type** as the last element. When the function returns multiple values, wrap the return in a tuple. For example, calling `transfer_private_to_public(to: address, amount: u128, token: Token) -> (Token, Final)`:
+Token programs declare that they implement the interface:
 
 ```leo
-let (change, future): (dyn record, Final) = _dynamic_call::[address, u128, dyn record, (dyn record, Final)](
-    token_id, 'aleo', 'transfer_private_to_public',
-    self.address, amount, token_record
-);
+program toka_token.aleo: ARC20 {
+    record Token { owner: address, amount: u128 }
+    // ... implements all ARC20 functions ...
+}
 ```
 
-Common patterns:
+### Interface Calls
 
-| Turbofish | Meaning |
-|-----------|---------|
-| `::[Final]` | No inputs, returns a future |
-| `::[address, u128, Final]` | Two inputs, returns a future |
-| `::[address, u128, dyn record, (dyn record, Final)]` | Three inputs, returns a record + future |
-
-### Function ID Constants
-
-Function names are field-encoded the same way as program names (see `identifierToField` below). For example, `identifierToField("transfer_from_public")` produces the first constant. These are standard across all ARC-20 tokens:
+The router calls functions on any ARC-20 token using `ARC20@(token_id)::method(...)`:
 
 ```leo
-const TRANSFER_FROM_PUBLIC_ID: field =
-    567541106188061564941814004975800285532843504244field;
-const TRANSFER_PUBLIC_TO_PRIVATE_ID: field =
-    163031276046149327277138208237194600527678254627957973064970868field;
-const TRANSFER_PRIVATE_TO_PUBLIC_ID: field =
-    159748619646624572882733203183532374243803035081386454010655348field;
+let transfer_future: Final = ARC20@(token_id)::transfer_from_public(from, to, amount);
 ```
+
+The `token_id` is a field-encoded program name passed at runtime. The VM resolves which program to call based on this value. No compile-time dependency on the token program is needed.
 
 ### `dyn record` — Type-Erased Records
 
-A `dyn record` is a record whose concrete type is unknown at compile time. When a dynamically-called function returns a record, your program receives it as a `dyn record`. You can pass it to another dynamic call, return it to the caller, or discard it — but you can't access its fields directly (since you don't know its type).
+A `dyn record` is a record whose concrete type is unknown at compile time. When the router calls a token program that returns a record, the router receives it as a `dyn record` since it doesn't know the token's concrete `Token` type. You can pass a `dyn record` to another dynamic call or return it to the caller, but you can't access its fields directly.
 
 ### `Final` Futures and Finalize Blocks
 
@@ -165,7 +159,7 @@ Dynamic calls that modify on-chain state return `Final` futures. These must be e
 ```leo
 program my_program.aleo {
     fn my_transition(...) -> Final {
-        let f: Final = _dynamic_call::[Final](...);
+        let f: Final = ARC20@(token_id)::transfer_from_public(...);
         return final { finalize_my_transition(f, ...); };
     }
 }
@@ -179,10 +173,9 @@ final fn finalize_my_transition(transfer_future: Final, ...) {
 
 ### Token IDs as Field Values
 
-The `token_id` parameter is a **field-encoded program name**, not a string. In snarkVM, `Identifier::to_field()` interprets the UTF-8 bytes of the program name as a little-endian integer:
+The `token_id` parameter is a **field-encoded program name**. In snarkVM, `Identifier::to_field()` interprets the UTF-8 bytes of the program name as a little-endian integer:
 
 ```typescript
-// "toka" -> 1634430836field
 function identifierToField(name: string): string {
   const bytes = new TextEncoder().encode(name);
   let result = BigInt(0);
@@ -191,6 +184,7 @@ function identifierToField(name: string): string {
   }
   return result.toString() + "field";
 }
+// identifierToField("toka_token") => "521331175801343116537716field"
 ```
 
 ### Constructor Requirement
@@ -209,7 +203,7 @@ program my_program.aleo {
 
 ## Code Walkthrough
 
-The router program (`token_router/src/main.leo`) implements a **Token Router** with three transitions:
+The router program (`token_router/src/main.leo`) defines the `ARC20` interface locally and uses it to dispatch calls to any compatible token program at runtime.
 
 ### 1. `route_transfer` — Public Transfer
 
@@ -217,16 +211,13 @@ Routes a `transfer_from_public` call to any ARC-20 token. Demonstrates the simpl
 
 ```leo
 fn route_transfer(
-    public token_id: field,       // Which token program to call
+    public token_id: field,
     public from: address,
     public to: address,
     public amount: u128
 ) -> Final {
-    let transfer_future: Final = _dynamic_call::[Final](
-        token_id, NETWORK_ALEO, TRANSFER_FROM_PUBLIC_ID,
-        from, to, amount
-    );
-    return final { finalize_route_transfer(transfer_future, ...); };
+    let transfer_future: Final = ARC20@(token_id)::transfer_from_public(from, to, amount);
+    return final { finalize_route_transfer(transfer_future, token_id, amount); };
 }
 ```
 
@@ -237,14 +228,13 @@ Accepts a `dyn record` (a private token record of unknown type) and converts it 
 ```leo
 fn route_deposit(
     public token_id: field,
-    private token_record: dyn record,    // Type-erased private record
+    private token_record: dyn record,
     public amount: u128
-) -> (dyn record, Final) {               // Returns change record
-    let (change, deposit_future): (dyn record, Final) = _dynamic_call::[dyn record, Final](
-        token_id, NETWORK_ALEO, TRANSFER_PRIVATE_TO_PUBLIC_ID,
-        self.address, amount, token_record
+) -> (dyn record, Final) {
+    let (change, deposit_future): (dyn record, Final) = ARC20@(token_id)::transfer_private_to_public(
+        token_record, self.address, amount
     );
-    return (change, final { ... });
+    return (change, final { finalize_route_deposit(deposit_future, token_id, amount); });
 }
 ```
 
@@ -257,12 +247,11 @@ fn route_withdraw(
     public token_id: field,
     public recipient: address,
     public amount: u128
-) -> (dyn record, Final) {                // Returns new private record
-    let (token_record, withdraw_future): (dyn record, Final) = _dynamic_call::[dyn record, Final](
-        token_id, NETWORK_ALEO, TRANSFER_PUBLIC_TO_PRIVATE_ID,
+) -> (dyn record, Final) {
+    let (token_record, withdraw_future): (dyn record, Final) = ARC20@(token_id)::transfer_public_to_private(
         recipient, amount
     );
-    return (token_record, final { ... });
+    return (token_record, final { finalize_route_withdraw(withdraw_future, token_id, amount); });
 }
 ```
 
@@ -273,27 +262,27 @@ fn route_withdraw(
 ```
 dynamic-dispatch-example/
 ├── token_router/                         # Token Router program
-│   ├── src/main.leo                      # 3 transitions: route_transfer, route_deposit, route_withdraw
-│   └── program.json
+│   ├── src/main.leo                      # ARC20 interface + 3 transitions
+│   └── program.json                      # dev_dependencies on token programs
 ├── toka_token/                           # Sample ARC-20 token A
-│   ├── src/main.leo
+│   ├── src/main.leo                      # Implements ARC20 interface
 │   └── program.json
 ├── tokb_token/                           # Sample ARC-20 token B (identical interface)
-│   ├── src/main.leo
+│   ├── src/main.leo                      # Implements ARC20 interface
 │   └── program.json
 ├── scripts/
-│   ├── build-programs.ts                 # Build all Leo programs + copy imports
+│   ├── build-programs.ts                 # Build all programs + copy dev-dep imports
 │   ├── deploy.ts                         # Deploy all 3 programs (SDK for devnet, CLI for live)
 │   ├── demo.ts                           # End-to-end demo
 │   └── preflight.ts                      # Environment validation
 ├── src-ts/
 │   ├── client/
 │   │   ├── aleo-client.ts                # RPC client (works with any network)
-│   │   └── transaction-executor.ts       # SDK (devnet) or CLI (live) execution
+│   │   └── transaction-executor.ts       # SDK or CLI execution (--with flag for CLI)
 │   ├── config.ts                         # Environment config (DOTENV= switching)
 │   ├── utils.ts                          # identifierToField() helper
 │   └── types.ts                          # TypeScript types
-├── tests/router.test.ts                  # Mocha tests (6 scenarios)
+├── tests/router.test.ts                  # Mocha tests (6 scenarios, SDK + CLI)
 ├── sdk/                                  # @provablehq/sdk submodule
 ├── package.json
 └── README.md
